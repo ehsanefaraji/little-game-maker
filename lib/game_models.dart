@@ -88,7 +88,7 @@ class GameProject {
 
   factory GameProject.fromJson(Map<String, dynamic> json) {
     final type = GameType.values.firstWhere(
-      (e) => e.name == json['type'] ?? json['kind'],
+      (e) => e.name == (json['type'] ?? json['kind']),
       orElse: () => GameType.maze,
     );
     final expected = type.columns * type.rows;
