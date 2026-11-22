@@ -116,8 +116,12 @@ class GameProject {
     if (type == GameType.maze) {
       for (var r = 0; r < 11; r++) {
         for (var c = 0; c < 11; c++) {
-          if (r == 0 || c == 0 || r == 10 || c == 10) cells[r * 11 + c] = 1;
-          if (r.isEven && c.isEven) cells[r * 11 + c] = 1;
+          cells[r * 11 + c] = 1;
+        }
+      }
+      for (var r = 1; r < 10; r += 2) {
+        for (var c = 1; c < 10; c += 2) {
+          cells[r * 11 + c] = 0;
         }
       }
       final visited = <int>{12};
