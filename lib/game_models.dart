@@ -125,8 +125,6 @@ class GameProject {
       cells[12] = 5;
       while (stack.isNotEmpty) {
         final current = stack.last;
-        final row = current ~/ 11;
-        final col = current % 11;
         final candidates = <int>[];
         for (final delta in [-22, 22, -2, 2]) {
           final next = current + delta;
