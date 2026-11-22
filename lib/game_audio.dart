@@ -26,7 +26,7 @@ class GameAudio {
     await _music.play(BytesSource(_wave([
       [392, .24], [494, .24], [587, .48], [494, .24],
       [440, .24], [523, .48], [440, .24], [392, .48],
-    ], secondsPerNote: .25)));
+    ])));
   }
 
   Future<void> effect({int frequency = 660, int durationMs = 100}) async {
@@ -40,10 +40,10 @@ class GameAudio {
   Future<void> collect() => effect(frequency: 1040, durationMs: 90);
 
   Uint8List _tone(int frequency, double seconds) {
-    return _wave([[frequency, seconds]], secondsPerNote: seconds);
+    return _wave([[frequency, seconds]]);
   }
 
-  Uint8List _wave(List<List<num>> notes, {required double secondsPerNote}) {
+  Uint8List _wave(List<List<num>> notes) {
     const sampleRate = 22050;
     final samples = <int>[];
     for (var n = 0; n < notes.length; n++) {
