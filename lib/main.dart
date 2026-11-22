@@ -738,7 +738,7 @@ class _GamePageState extends State<GamePage> {
       case GameType.driving:
         return Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
           _controlButton(Icons.arrow_back_rounded, () => _changeLane(-1)),
-          FilledButton.icon(onPressed: () => _changeLane(0), icon: const Icon(Icons.sports_score), label: const Text('مسیر وسط')),
+          FilledButton.icon(onPressed: () { if (!paused && !finished) setState(() { lane = 1; moves++; }); }, icon: const Icon(Icons.sports_score), label: const Text('مسیر وسط')),
           _controlButton(Icons.arrow_forward_rounded, () => _changeLane(1)),
         ]);
     }
