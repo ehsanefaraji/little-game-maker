@@ -87,6 +87,12 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Run automated tests
+        run: flutter test
+
+      - name: Analyze Dart code
+        run: flutter analyze
+
       - name: Build release APK
         run: flutter build apk --release
 
