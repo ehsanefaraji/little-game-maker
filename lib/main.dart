@@ -771,6 +771,14 @@ class GameBackdrop extends StatelessWidget {
           Positioned(top: 130, left: 18, child: _bubble(42, Colors.white.withOpacity(.2))),
           Positioned(bottom: 70, right: 30, child: _bubble(55, Colors.white.withOpacity(.18))),
           Positioned(bottom: 25, left: 45, child: _bubble(28, Colors.white.withOpacity(.24))),
+          Positioned(top: 28, left: 28, child: Text(
+            ['🦋  🌿', '☀️  🐚', '🌙  🪐', '🌈  🍭'][index],
+            style: const TextStyle(fontSize: 25),
+          )),
+          Positioned(bottom: 12, right: 12, child: Text(
+            ['🌳  🍄', '🏝️  🌊', '🚀  ⭐', '🍬  🍡'][index],
+            style: const TextStyle(fontSize: 27),
+          )),
         ]),
       ),
     );
