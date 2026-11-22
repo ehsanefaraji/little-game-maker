@@ -102,8 +102,8 @@ class GameProject {
       name: json['name']?.toString() ?? 'بازی من',
       type: type,
       cells: cells,
-      character: ((json['character'] as num?)?.toInt() ?? 0).clamp(0, characterOptions.length - 1),
-      background: ((json['background'] as num?)?.toInt() ?? 0).clamp(0, backgroundNames.length - 1),
+      character: ((json['character'] as num?)?.toInt() ?? 0).clamp(0, characterOptions.length - 1).toInt(),
+      background: ((json['background'] as num?)?.toInt() ?? 0).clamp(0, backgroundNames.length - 1).toInt(),
       soundEnabled: json['soundEnabled'] as bool? ?? true,
       musicEnabled: json['musicEnabled'] as bool? ?? false,
     );
@@ -147,10 +147,10 @@ class GameProject {
           stack.add(next);
         }
       }
-      cells[109] = 4;
+      cells[108] = 4;
       final open = <int>[];
       for (var i = 0; i < cells.length; i++) {
-        if (cells[i] == 0 && i != 12 && i != 109) open.add(i);
+        if (cells[i] == 0 && i != 12 && i != 108) open.add(i);
       }
       open.shuffle(random);
       for (final i in open.take(8)) cells[i] = 2;
