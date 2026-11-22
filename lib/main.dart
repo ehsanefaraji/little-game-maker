@@ -32,9 +32,10 @@ class LittleGameMaker extends StatelessWidget {
 
 class ProjectStore {
   static const _key = 'little_game_maker_projects_v2';
+  static const _legacyKey = 'lgm_projects_v1';
   static Future<List<GameProject>> load() async {
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_key);
+    final raw = prefs.getString(_key) ?? prefs.getString(_legacyKey);
     if (raw == null) return [];
     try {
       final list = (jsonDecode(raw) as List).cast<Map<String, dynamic>>();
