@@ -368,7 +368,9 @@ class PlatformerPlayer extends BodyComponent<PlatformerPhysicsGame> {
   }
 
   void setFacingLeft(bool value) {
-    if (isLoaded) _sprite.isFlippedHorizontally = value;
+    if (isLoaded && _sprite.isFlippedHorizontally != value) {
+      _sprite.flipHorizontally();
+    }
   }
 
   void setHurtBlink(bool visible) {
