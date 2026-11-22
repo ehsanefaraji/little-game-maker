@@ -1,13 +1,18 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'game_audio.dart';
 import 'game_models.dart';
+import 'platformer_flame_game.dart';
+import 'game_art.dart';
 
 const purple = Color(0xFF7657D5);
 const ink = Color(0xFF332B4D);
+const pageBg = Color(0xFFF5F2FF);
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -23,7 +28,9 @@ class LittleGameMaker extends StatelessWidget {
         theme: ThemeData(
           useMaterial3: true,
           colorScheme: ColorScheme.fromSeed(seedColor: purple),
-          scaffoldBackgroundColor: const Color(0xFFF7F4FF),
+          scaffoldBackgroundColor: pageBg,
+          inputDecorationTheme: InputDecorationTheme(filled: true, fillColor: const Color(0xFFF8F6FD), border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none)),
+          filledButtonTheme: FilledButtonThemeData(style: FilledButton.styleFrom(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)), padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 13))),
           appBarTheme: const AppBarTheme(backgroundColor: Color(0xFFF7F4FF), foregroundColor: ink),
         ),
         home: const HomePage(),
@@ -38,8 +45,12 @@ class ProjectStore {
     final raw = prefs.getString(_key) ?? prefs.getString(_legacyKey);
     if (raw == null) return [];
     try {
-      final list = (jsonDecode(raw) as List).cast<Map<String, dynamic>>();
-      return list.map(GameProject.fromJson).toList();
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return [];
+      return decoded
+          .whereType<Map>()
+          .map((item) => GameProject.fromJson(Map<String, dynamic>.from(item)))
+          .toList();
     } catch (_) {
       return [];
     }
@@ -48,6 +59,47 @@ class ProjectStore {
   static Future<void> save(List<GameProject> projects) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_key, jsonEncode(projects.map((e) => e.toJson()).toList()));
+  }
+}
+
+
+class AchievementStore {
+  static const _key = 'little_game_maker_achievements_v1';
+  static const _completedKey = 'little_game_maker_completed_levels_v1';
+
+  static Future<Set<String>> achievements() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getStringList(_key)?.toSet() ?? <String>{};
+  }
+
+  static Future<Set<String>> completedLevels() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getStringList(_completedKey)?.toSet() ?? <String>{};
+  }
+
+  static Future<void> unlock(String id) async {
+    final prefs = await SharedPreferences.getInstance();
+    final values = prefs.getStringList(_key) ?? <String>[];
+    if (!values.contains(id)) {
+      values.add(id);
+      await prefs.setStringList(_key, values);
+    }
+  }
+
+  static Future<void> markLevelComplete(GameProject project) async {
+    final prefs = await SharedPreferences.getInstance();
+    final values = prefs.getStringList(_completedKey) ?? <String>[];
+    final key = '${project.id}:${project.activeLevel}';
+    if (!values.contains(key)) values.add(key);
+    await prefs.setStringList(_completedKey, values);
+    await unlock('first_win');
+    if (project.activeLevel >= 2) await unlock('three_levels');
+  }
+
+  static Future<bool> isLevelUnlocked(GameProject project, int level) async {
+    if (level == 0) return true;
+    final completed = await completedLevels();
+    return completed.contains('${project.id}:${level - 1}');
   }
 }
 
@@ -72,6 +124,60 @@ class _HomePageState extends State<HomePage> {
     if (mounted) setState(() { projects = result; loading = false; });
   }
 
+  Future<void> _exportProjects() async {
+    final data = JsonEncoder.withIndent('  ').convert(projects.map((p) => p.toJson()).toList());
+    await Clipboard.setData(ClipboardData(text: data));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('پشتیبان بازی‌ها در حافظه موقت کپی شد. آن را در یک فایل متنی ذخیره کن.')));
+  }
+
+  Future<void> _importProjects() async {
+    final controller = TextEditingController();
+    final raw = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('بازی‌ها را وارد کن'),
+        content: SizedBox(width: 520, child: TextField(
+          controller: controller,
+          minLines: 5,
+          maxLines: 10,
+          decoration: const InputDecoration(hintText: 'متن پشتیبان JSON را اینجا جای‌گذاری کن'),
+        )),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('انصراف')),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, controller.text), child: const Text('وارد کردن')),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (raw == null || raw.trim().isEmpty) return;
+    try {
+      final decoded = jsonDecode(raw);
+      final incoming = decoded is List
+          ? decoded.whereType<Map>().map((e) => GameProject.fromJson(Map<String, dynamic>.from(e))).toList()
+          : decoded is Map
+              ? [GameProject.fromJson(Map<String, dynamic>.from(decoded))]
+              : <GameProject>[];
+      if (incoming.isEmpty) throw const FormatException('empty project list');
+      final merged = List<GameProject>.from(projects);
+      for (final project in incoming) {
+        final index = merged.indexWhere((p) => p.id == project.id);
+        if (index < 0) {
+          merged.add(project);
+        } else {
+          merged[index] = project;
+        }
+      }
+      await ProjectStore.save(merged);
+      if (!mounted) return;
+      setState(() => projects = merged);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${incoming.length} بازی با موفقیت وارد شد.')));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('فایل پشتیبان معتبر نیست یا ساختار آن پشتیبانی نمی‌شود.')));
+    }
+  }
+
   Future<void> _create(GameType type) async {
     final controller = TextEditingController(text: 'بازی ' + type.title + ' من');
     final name = await showDialog<String>(
@@ -87,6 +193,9 @@ class _HomePageState extends State<HomePage> {
     );
     controller.dispose();
     if (name == null) return;
+    await AchievementStore.unlock('first_project');
+    final createdTypes = <String>{...projects.map((p) => p.type.name), type.name};
+    if (GameType.values.every((t) => createdTypes.contains(t.name))) await AchievementStore.unlock('all_types');
     await _openEditor(GameProject.create(type, name.isEmpty ? 'بازی من' : name));
   }
 
@@ -113,6 +222,27 @@ class _HomePageState extends State<HomePage> {
     if (mounted) setState(() {});
   }
 
+  Future<void> _showAchievements() async {
+    final unlocked = await AchievementStore.achievements();
+    if (!mounted) return;
+    const items = <String, String>{
+      'first_project': 'اولین اثر هنری — اولین بازی‌ات را بساز.',
+      'first_win': 'قهرمان — یک مرحله را با موفقیت تمام کن.',
+      'three_levels': 'ماجراجوی بزرگ — مرحله سوم یک بازی را تمام کن.',
+      'all_types': 'همه‌فن‌حریف — از هر چهار قالب بازی بساز.',
+    };
+    showDialog<void>(context: context, builder: (d) => AlertDialog(
+      title: const Text('جام‌ها و دستاوردها 🏆'),
+      content: Column(mainAxisSize: MainAxisSize.min, children: items.entries.map((entry) => ListTile(
+        contentPadding: EdgeInsets.zero,
+        leading: Icon(unlocked.contains(entry.key) ? Icons.workspace_premium_rounded : Icons.lock_outline_rounded,
+          color: unlocked.contains(entry.key) ? const Color(0xFFE5A52E) : Colors.grey),
+        title: Text(entry.value, style: TextStyle(fontSize: 13, color: unlocked.contains(entry.key) ? ink : Colors.black45)),
+      )).toList()),
+      actions: [FilledButton(onPressed: () => Navigator.pop(d), child: const Text('ادامه'))],
+    ));
+  }
+
   void _showHelp() {
     showDialog<void>(context: context, builder: (d) => AlertDialog(
       title: const Text('راهنمای بازی‌ساز 🌟'),
@@ -131,8 +261,20 @@ class _HomePageState extends State<HomePage> {
                   slivers: [
                     SliverAppBar(
                       pinned: true,
-                      title: const Text('بازی‌ساز کوچولو 🎮', style: TextStyle(fontWeight: FontWeight.w900)),
-                      actions: [IconButton(tooltip: 'راهنما', onPressed: _showHelp, icon: const Icon(Icons.help_outline_rounded)), const SizedBox(width: 6)],
+                      title: const Text('بازی‌ساز کوچولو', style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: -.3)),
+                      actions: [
+                        PopupMenuButton<String>(
+                          tooltip: 'پشتیبان‌گیری و انتقال بازی‌ها',
+                          onSelected: (value) { if (value == 'export') _exportProjects(); if (value == 'import') _importProjects(); },
+                          itemBuilder: (_) => const [
+                            PopupMenuItem(value: 'export', child: ListTile(dense: true, leading: Icon(Icons.copy_all_rounded), title: Text('کپی پشتیبان بازی‌ها'))),
+                            PopupMenuItem(value: 'import', child: ListTile(dense: true, leading: Icon(Icons.file_download_outlined), title: Text('وارد کردن پشتیبان'))),
+                          ],
+                        ),
+                        IconButton(tooltip: 'دستاوردها', onPressed: _showAchievements, icon: const Icon(Icons.emoji_events_rounded, color: Color(0xFFE5A52E))),
+                        IconButton(tooltip: 'راهنما', onPressed: _showHelp, icon: const Icon(Icons.help_outline_rounded)),
+                        const SizedBox(width: 6),
+                      ],
                     ),
                     SliverToBoxAdapter(
                       child: Padding(
@@ -165,7 +307,7 @@ class _HomePageState extends State<HomePage> {
                             child: Ink(
                               decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(22), border: Border.all(color: colors[index]), boxShadow: [BoxShadow(color: colors[index].withOpacity(.5), blurRadius: 12, offset: const Offset(0, 5))]),
                               child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                                Container(width: 58, height: 58, decoration: BoxDecoration(color: colors[index], borderRadius: BorderRadius.circular(18)), alignment: Alignment.center, child: Text(type.emoji, style: const TextStyle(fontSize: 32))),
+                                Container(width: 58, height: 58, padding: const EdgeInsets.all(5), decoration: BoxDecoration(color: colors[index], borderRadius: BorderRadius.circular(18)), alignment: Alignment.center, child: GameTileArt(type: type, value: type == GameType.driving ? 4 : type == GameType.memory ? 2 : 0, isPlayer: type == GameType.maze || type == GameType.platformer || type == GameType.driving)),
                                 const SizedBox(height: 9),
                                 Text(type.title, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: ink)),
                                 Padding(padding: const EdgeInsets.symmetric(horizontal: 8), child: Text(type.description, textAlign: TextAlign.center, maxLines: 2, style: const TextStyle(fontSize: 10, color: Colors.black54))),
@@ -197,9 +339,9 @@ class _HomePageState extends State<HomePage> {
                             color: Colors.white,
                             child: ListTile(
                               contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
-                              leading: CircleAvatar(backgroundColor: const Color(0xFFECE6FF), child: Text(project.type.emoji, style: const TextStyle(fontSize: 23))),
+                              leading: CircleAvatar(backgroundColor: const Color(0xFFECE6FF), child: SizedBox(width: 34, height: 34, child: GameTileArt(type: project.type, value: project.type == GameType.driving ? 4 : project.type == GameType.memory ? 2 : 0, character: project.character, isPlayer: project.type != GameType.memory))),
                               title: Text(project.name, style: const TextStyle(fontWeight: FontWeight.w800)),
-                              subtitle: Text(project.type.title + ' • ' + backgroundNames[project.background]),
+                              subtitle: Text(project.type.title + ' • ' + backgroundNames[project.background] + ' • ' + project.levels.length.toString() + ' مرحله'),
                               onTap: () => _openEditor(project),
                               trailing: PopupMenuButton<String>(
                                 onSelected: (value) {
@@ -234,6 +376,8 @@ class _EditorPageState extends State<EditorPage> {
   late GameProject project;
   int selected = 1;
   bool saving = false;
+  final List<List<int>> undoStack = [];
+  final List<List<int>> redoStack = [];
 
   @override
   void initState() {
@@ -256,7 +400,216 @@ class _EditorPageState extends State<EditorPage> {
         GameType.driving => {0: 'خالی', 2: 'جایزه', 3: 'مانع'}[value]!,
       };
 
+  void _paintCell(int index, int value) {
+    if (index < 0 || index >= project.cells.length) return;
+    if (project.type == GameType.platformer && project.activeLayer > 0 && (value == 4 || value == 5)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('نقطه شروع و پایان را در لایه اصلی قرار بده.')),
+      );
+      return;
+    }
+    final before = List<int>.from(project.type == GameType.platformer ? project.layers[project.activeLayer] : project.cells);
+    var targetIndex = index;
+    if (project.type == GameType.platformer && value == 5) {
+      targetIndex = (project.rows - 2) * project.columns + index % project.columns;
+    }
+    final targetLayer = project.type == GameType.platformer ? project.layers[project.activeLayer] : project.cells;
+    if ((project.type == GameType.maze || project.type == GameType.platformer) && (value == 4 || value == 5)) {
+      for (var i = 0; i < targetLayer.length; i++) {
+        if (targetLayer[i] == value) targetLayer[i] = 0;
+      }
+    }
+    targetLayer[targetIndex] = project.type == GameType.platformer && value == 0 && project.activeLayer > 0 ? -1 : value;
+    if (before.toString() == targetLayer.toString()) return;
+    if (project.type == GameType.platformer) project.cells = project.composeLayers();
+    project.syncActiveLevel();
+    undoStack.add(before);
+    if (undoStack.length > 80) undoStack.removeAt(0);
+    redoStack.clear();
+    setState(() {});
+  }
+
+  void _undo() {
+    if (undoStack.isEmpty) return;
+    redoStack.add(List<int>.from(project.type == GameType.platformer ? project.layers[project.activeLayer] : project.cells));
+    setState(() {
+      final restored = undoStack.removeLast();
+      if (project.type == GameType.platformer) {
+        project.layers[project.activeLayer] = restored;
+        project.cells = project.composeLayers();
+      } else {
+        project.cells = restored;
+      }
+      project.syncActiveLevel();
+    });
+  }
+
+  void _redo() {
+    if (redoStack.isEmpty) return;
+    undoStack.add(List<int>.from(project.type == GameType.platformer ? project.layers[project.activeLayer] : project.cells));
+    setState(() {
+      final restored = redoStack.removeLast();
+      if (project.type == GameType.platformer) {
+        project.layers[project.activeLayer] = restored;
+        project.cells = project.composeLayers();
+      } else {
+        project.cells = restored;
+      }
+      project.syncActiveLevel();
+    });
+  }
+
+  void _clearBoard() {
+    undoStack.add(List<int>.from(project.type == GameType.platformer ? project.layers[project.activeLayer] : project.cells));
+    redoStack.clear();
+    setState(() {
+      final cleared = List<int>.filled(project.columns * project.rows, project.type == GameType.platformer && project.activeLayer > 0 ? -1 : 0);
+      if (project.type == GameType.platformer) {
+        project.layers[project.activeLayer] = cleared;
+        project.cells = project.composeLayers();
+      } else {
+        project.cells = cleared;
+      }
+      project.syncActiveLevel();
+    });
+  }
+
+  Future<void> _showLevelMap() async {
+    final completed = await AchievementStore.completedLevels();
+    if (!mounted) return;
+    final unlocked = <int>{0};
+    for (var i = 1; i < project.levels.length; i++) {
+      if (completed.contains('${project.id}:${i - 1}')) unlocked.add(i);
+    }
+    final selected = await showDialog<int>(context: context, builder: (d) => AlertDialog(
+      title: const Text('نقشه جهان مراحل 🗺️'),
+      content: SizedBox(width: 420, child: Wrap(spacing: 10, runSpacing: 10, children: List.generate(project.levels.length, (i) {
+        final isUnlocked = unlocked.contains(i);
+        final isDone = completed.contains('${project.id}:$i');
+        return InkWell(
+          onTap: isUnlocked ? () => Navigator.pop(d, i) : null,
+          borderRadius: BorderRadius.circular(18),
+          child: Container(width: 76, height: 82, decoration: BoxDecoration(
+            color: isDone ? const Color(0xFFDDF5E6) : isUnlocked ? const Color(0xFFEAE3FF) : const Color(0xFFF0EFF3),
+            borderRadius: BorderRadius.circular(18), border: Border.all(color: i == project.activeLevel ? purple : Colors.transparent, width: 2)),
+            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Icon(isDone ? Icons.star_rounded : isUnlocked ? Icons.flag_rounded : Icons.lock_rounded,
+                color: isDone ? const Color(0xFFE0A52B) : isUnlocked ? purple : Colors.grey, size: 27),
+              const SizedBox(height: 4), Text('مرحله ${i + 1}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800)),
+            ]),
+          ),
+        );
+      }))),
+      actions: [TextButton(onPressed: () => Navigator.pop(d), child: const Text('بستن'))],
+    ));
+    if (selected != null) _selectLevel(selected);
+  }
+
+  void _selectLevel(int index) {
+    if (index < 0 || index >= project.levels.length) return;
+    setState(() {
+      project.setActiveLevel(index);
+      undoStack.clear();
+      redoStack.clear();
+    });
+  }
+
+  void _addLevel({bool duplicate = false}) {
+    if (project.levels.length >= 20) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('حداکثر ۲۰ مرحله برای هر بازی مجاز است.')));
+      return;
+    }
+    project.syncActiveLevel();
+    setState(() {
+      project.addLevel(copyFrom: duplicate ? project.cells : null);
+      undoStack.clear();
+      redoStack.clear();
+    });
+  }
+
+  void _deleteLevel() {
+    if (project.levels.length <= 1) return;
+    setState(() {
+      project.removeActiveLevel();
+      undoStack.clear();
+      redoStack.clear();
+    });
+  }
+
+  void _selectLayer(int index) {
+    if (index < 0 || index >= project.layers.length) return;
+    setState(() {
+      project.activeLayer = index;
+      project.cells = project.composeLayers();
+      undoStack.clear();
+      redoStack.clear();
+    });
+  }
+
+  void _addLayer() {
+    if (project.layers.length >= GameProject.layerNames.length) return;
+    setState(() {
+      project.addLayer();
+      undoStack.clear();
+      redoStack.clear();
+    });
+  }
+
+  void _removeLayer() {
+    if (project.layers.length <= 1) return;
+    setState(() {
+      project.removeActiveLayer();
+      undoStack.clear();
+      redoStack.clear();
+    });
+  }
+
+  void _moveLayer(int offset) {
+    if (project.activeLayer + offset < 0 || project.activeLayer + offset >= project.layers.length) return;
+    setState(() {
+      project.moveActiveLayer(offset);
+      undoStack.clear();
+      redoStack.clear();
+    });
+  }
+
+  bool _mazeHasPath() {
+    final start = project.cells.indexOf(5);
+    final goal = project.cells.indexOf(4);
+    if (start < 0 || goal < 0) return false;
+    final visited = <int>{start};
+    final queue = Queue<int>()..add(start);
+    while (queue.isNotEmpty) {
+      final current = queue.removeFirst();
+      if (current == goal) return true;
+      final candidates = [
+        current - project.columns,
+        current + project.columns,
+        current - 1,
+        current + 1,
+      ];
+      for (final next in candidates) {
+        if (next < 0 || next >= project.cells.length) continue;
+        if ((next - current).abs() == 1 && next ~/ project.columns != current ~/ project.columns) continue;
+        if (project.cells[next] == 1 || !visited.add(next)) continue;
+        queue.add(next);
+      }
+    }
+    return false;
+  }
+
+  void _preview() {
+    if (project.type == GameType.maze && !_mazeHasPath()) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('مسیر شروع تا خروجی بسته است؛ دیوارها را طوری بچین که راه باز بماند.')),
+      );
+      return;
+    }
+    Navigator.push(context, MaterialPageRoute(builder: (_) => GamePage(project: project.copy())));
+  }
+
   Future<void> _save() async {
+    project.syncActiveLevel();
     setState(() => saving = true);
     final all = await ProjectStore.load();
     final index = all.indexWhere((p) => p.id == project.id);
@@ -282,7 +635,7 @@ class _EditorPageState extends State<EditorPage> {
         border: Border.all(color: selectedNow ? purple : Colors.black12, width: selectedNow ? 2 : 1),
       ),
       child: Column(children: [
-        Text(tileEmoji(project.type, value), style: const TextStyle(fontSize: 23)),
+        SizedBox(width: 38, height: 30, child: GameTileArt(type: project.type, value: value, character: project.character, isPlayer: value == 5 && project.type == GameType.maze)),
         const SizedBox(height: 3),
         Text(toolLabel(value), maxLines: 1, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700)),
       ]),
@@ -302,7 +655,7 @@ class _EditorPageState extends State<EditorPage> {
           appBar: AppBar(
             title: Text(project.name, style: const TextStyle(fontWeight: FontWeight.w800)),
             actions: [
-              IconButton(tooltip: 'پیش‌نمایش بازی', onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => GamePage(project: project.copy()))), icon: const Icon(Icons.play_circle_fill_rounded, color: purple)),
+              IconButton(tooltip: 'پیش‌نمایش بازی', onPressed: _preview, icon: const Icon(Icons.play_circle_fill_rounded, color: purple)),
               IconButton(tooltip: 'ذخیره', onPressed: saving ? null : _save, icon: const Icon(Icons.save_rounded)),
             ],
           ),
@@ -317,7 +670,82 @@ class _EditorPageState extends State<EditorPage> {
                   Text(project.columns.toString() + ' × ' + project.rows.toString(), style: const TextStyle(fontWeight: FontWeight.bold, color: purple)),
                 ])),
                 const SizedBox(height: 12),
-                _buildBoard(),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
+                  child: Row(children: [
+                    IconButton(tooltip: 'مرحله قبلی', onPressed: project.activeLevel > 0 ? () => _selectLevel(project.activeLevel - 1) : null, icon: const Icon(Icons.chevron_right_rounded)),
+                    Expanded(child: Text('مرحله ${project.activeLevel + 1} از ${project.levels.length}', textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w900, color: ink))),
+                    IconButton(tooltip: 'مرحله بعدی', onPressed: project.activeLevel < project.levels.length - 1 ? () => _selectLevel(project.activeLevel + 1) : null, icon: const Icon(Icons.chevron_left_rounded)),
+                    const VerticalDivider(width: 12),
+                    IconButton(tooltip: 'نقشه جهان مراحل', onPressed: _showLevelMap, icon: const Icon(Icons.map_rounded, color: purple)),
+                    IconButton(tooltip: 'تکثیر مرحله', onPressed: () => _addLevel(duplicate: true), icon: const Icon(Icons.copy_rounded)),
+                    IconButton(tooltip: 'افزودن مرحله خالی', onPressed: () => _addLevel(), icon: const Icon(Icons.add_circle_rounded, color: purple)),
+                    IconButton(tooltip: 'حذف مرحله', onPressed: project.levels.length > 1 ? _deleteLevel : null, icon: const Icon(Icons.delete_outline_rounded)),
+                  ]),
+                ),
+                if (project.type == GameType.platformer) ...[
+                  const SizedBox(height: 9),
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Row(children: [
+                        const Expanded(child: Text('لایه‌های طراحی', style: TextStyle(fontWeight: FontWeight.w900))),
+                        IconButton(tooltip: 'افزودن لایه', onPressed: project.layers.length < GameProject.layerNames.length ? _addLayer : null, icon: const Icon(Icons.add_circle, color: purple)),
+                        IconButton(tooltip: 'انتقال لایه به بالا', onPressed: project.activeLayer < project.layers.length - 1 ? () => _moveLayer(1) : null, icon: const Icon(Icons.arrow_upward_rounded)),
+                        IconButton(tooltip: 'انتقال لایه به پایین', onPressed: project.activeLayer > 0 ? () => _moveLayer(-1) : null, icon: const Icon(Icons.arrow_downward_rounded)),
+                        IconButton(tooltip: 'حذف لایه انتخاب‌شده', onPressed: project.layers.length > 1 ? _removeLayer : null, icon: const Icon(Icons.delete_outline)),
+                      ]),
+                      Wrap(spacing: 6, runSpacing: 6, children: List.generate(project.layers.length, (i) => Row(mainAxisSize: MainAxisSize.min, children: [
+                        ChoiceChip(
+                          label: Text(GameProject.layerNames[i]),
+                          selected: project.activeLayer == i,
+                          onSelected: (_) => _selectLayer(i),
+                          selectedColor: const Color(0xFFE9E1FF),
+                        ),
+                        IconButton(
+                          visualDensity: VisualDensity.compact,
+                          tooltip: project.layerVisibility[i] ? 'پنهان کردن لایه' : 'نمایش لایه',
+                          onPressed: () => setState(() { project.toggleLayerVisibility(i); }),
+                          icon: Icon(project.layerVisibility[i] ? Icons.visibility_rounded : Icons.visibility_off_rounded, size: 18, color: project.layerVisibility[i] ? purple : Colors.grey),
+                        ),
+                      ]))),
+                      const SizedBox(height: 4),
+                      const Text('لایه را انتخاب کن، با فلش‌ها ترتیب نمایش را تغییر بده و فقط همان لایه را ویرایش کن.', style: TextStyle(fontSize: 10, color: Colors.black54)),
+                    ]),
+                  ),
+                ],
+                const SizedBox(height: 9),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    const Row(children: [Icon(Icons.extension_rounded, color: purple), SizedBox(width: 7), Text('قانون‌های بازی من', style: TextStyle(fontWeight: FontWeight.w900))]),
+                    const SizedBox(height: 5),
+                    const Text('وقتی بازیکن سکه می‌گیرد…', style: TextStyle(fontSize: 12, color: Colors.black54)),
+                    Row(children: [
+                      const Expanded(child: Text('امتیاز اضافه برای هر سکه', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700))),
+                      DropdownButton<int>(value: project.coinBonusScore, items: [0, 5, 10, 15, 20, 30, 50].map((v) => DropdownMenuItem(value: v, child: Text('+$v'))).toList(), onChanged: (v) => setState(() => project.coinBonusScore = v ?? 0)),
+                    ]),
+                    SwitchListTile(
+                      dense: true, contentPadding: EdgeInsets.zero,
+                      title: const Text('یک جان اضافه بگیر', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                      value: project.extraLifeOnCoin,
+                      onChanged: (v) => setState(() => project.extraLifeOnCoin = v),
+                    ),
+                  ]),
+                ),
+                const SizedBox(height: 8),
+                Row(children: [
+                  const Spacer(),
+                  IconButton.filledTonal(tooltip: 'واگرد', onPressed: undoStack.isEmpty ? null : _undo, icon: const Icon(Icons.undo_rounded)),
+                  const SizedBox(width: 5),
+                  IconButton.filledTonal(tooltip: 'انجام دوباره', onPressed: redoStack.isEmpty ? null : _redo, icon: const Icon(Icons.redo_rounded)),
+                  const SizedBox(width: 5),
+                  IconButton.filledTonal(tooltip: 'پاک کردن صفحه', onPressed: _clearBoard, icon: const Icon(Icons.delete_sweep_rounded)),
+                ]),
+                RepaintBoundary(child: _buildBoard()),
                 const SizedBox(height: 14),
                 _sectionTitle('ابزارهای طراحی'),
                 const SizedBox(height: 8),
@@ -327,7 +755,7 @@ class _EditorPageState extends State<EditorPage> {
                 const SizedBox(height: 8),
                 SizedBox(height: 58, child: ListView(scrollDirection: Axis.horizontal, children: List.generate(characterOptions.length, (i) => GestureDetector(
                   onTap: () => setState(() => project.character = i),
-                  child: AnimatedContainer(duration: const Duration(milliseconds: 150), width: 54, margin: const EdgeInsets.only(left: 8), decoration: BoxDecoration(color: project.character == i ? const Color(0xFFE9E1FF) : Colors.white, borderRadius: BorderRadius.circular(15), border: Border.all(color: project.character == i ? purple : Colors.black12, width: project.character == i ? 2 : 1)), alignment: Alignment.center, child: Text(characterOptions[i], style: const TextStyle(fontSize: 29))),
+                  child: AnimatedContainer(duration: const Duration(milliseconds: 150), width: 54, margin: const EdgeInsets.only(left: 8), decoration: BoxDecoration(color: project.character == i ? const Color(0xFFE9E1FF) : Colors.white, borderRadius: BorderRadius.circular(15), border: Border.all(color: project.character == i ? purple : Colors.black12, width: project.character == i ? 2 : 1)), alignment: Alignment.center, child: GameTileArt(type: GameType.maze, value: 0, character: i, isPlayer: true)),
                 )))),
                 const SizedBox(height: 15),
                 _sectionTitle('پس‌زمینه کارتونی'),
@@ -342,7 +770,7 @@ class _EditorPageState extends State<EditorPage> {
                 const SizedBox(height: 8),
                 FilledButton.icon(onPressed: saving ? null : _save, icon: const Icon(Icons.save), label: Text(saving ? 'در حال ذخیره...' : 'ذخیره بازی')),
                 const SizedBox(height: 8),
-                OutlinedButton.icon(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => GamePage(project: project.copy()))), icon: const Icon(Icons.sports_esports), label: const Text('اجرای بازی')),
+                OutlinedButton.icon(onPressed: _preview, icon: const Icon(Icons.sports_esports), label: const Text('اجرای بازی')),
               ],
             ),
           ),
@@ -361,14 +789,14 @@ class _EditorPageState extends State<EditorPage> {
             itemCount: project.cells.length,
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: project.columns, crossAxisSpacing: 3, mainAxisSpacing: 3),
             itemBuilder: (context, index) => DragTarget<int>(
-              onAcceptWithDetails: (details) => setState(() => project.cells[index] = details.data),
+              onAcceptWithDetails: (details) => _paintCell(index, details.data),
               builder: (context, candidates, rejected) => GestureDetector(
-                onTap: () => setState(() => project.cells[index] = selected),
+                onTap: () => _paintCell(index, selected),
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 100),
                   decoration: BoxDecoration(color: candidates.isNotEmpty ? Colors.amber : tileColor(project.type, project.cells[index]), borderRadius: BorderRadius.circular(5), border: Border.all(color: Colors.black.withOpacity(.07))),
                   alignment: Alignment.center,
-                  child: FittedBox(child: Text(tileEmoji(project.type, project.cells[index]), style: const TextStyle(fontSize: 19))),
+                  child: GameTileArt(type: project.type, value: project.cells[index], character: project.character),
                 ),
               ),
             ),
@@ -393,6 +821,7 @@ class _GamePageState extends State<GamePage> {
   bool paused = false, finished = false;
   int player = 0, playerX = 0, playerY = 0, jumpTicks = 0, lane = 1, roadTick = 0;
   final List<int> roadObjects = [];
+  final List<int> roadCoins = [];
   final Set<int> revealed = {}, matched = {};
   int? firstCard;
   bool checkingCards = false;
@@ -408,9 +837,9 @@ class _GamePageState extends State<GamePage> {
       player = cells.indexOf(5);
       if (player < 0) player = 12;
     } else if (project.type == GameType.platformer) {
-      playerX = 0;
+      final start = cells.indexOf(5);
+      playerX = start >= 0 ? start % project.columns : 0;
       playerY = project.rows - 2;
-      ticker = Timer.periodic(const Duration(milliseconds: 190), (_) => _platformTick());
     } else if (project.type == GameType.memory) {
       _makeMemoryCards();
     } else if (project.type == GameType.driving) {
@@ -420,16 +849,21 @@ class _GamePageState extends State<GamePage> {
   }
 
   void _makeMemoryCards() {
-    final symbols = cells.where((e) => e > 0).toSet().toList();
-    while (symbols.length < 8) symbols.add(symbols.length + 1);
+    final symbols = <int>{...cells.where((value) => value >= 1 && value <= 8)};
+    for (var value = 1; value <= 8 && symbols.length < 8; value++) {
+      symbols.add(value);
+    }
     final chosen = symbols.take(8).toList();
     memoryCards = [...chosen, ...chosen]..shuffle(random);
   }
 
   void _resetRoadObjects() {
     roadObjects.clear();
+    roadCoins.clear();
     for (var i = 0; i < cells.length; i++) {
-      if (cells[i] == 3) roadObjects.add((i ~/ project.columns) * 3 + i % 3);
+      final roadPosition = (i ~/ project.columns) * 3 + i % 3;
+      if (cells[i] == 3) roadObjects.add(roadPosition);
+      if (cells[i] == 2) roadCoins.add(roadPosition);
     }
     if (roadObjects.isEmpty) roadObjects.add(1);
   }
@@ -451,7 +885,7 @@ class _GamePageState extends State<GamePage> {
     setState(() {
       player = next;
       moves++;
-      if (collected) { cells[next] = 0; score++; }
+      if (collected) { cells[next] = 0; score += 1 + project.coinBonusScore; if (project.extraLifeOnCoin) lives = min(5, lives + 1).toInt(); }
     });
     if (collected) GameAudio.instance.collect();
     if (cells[next] == 4) _finish(true, 'از هزارتو بیرون آمدی و ' + score.toString() + ' گوهر جمع کردی!');
@@ -471,24 +905,12 @@ class _GamePageState extends State<GamePage> {
     GameAudio.instance.effect(frequency: 520, durationMs: 90);
   }
 
-  void _platformTick() {
-    if (!mounted || paused || finished) return;
-    setState(() {
-      if (jumpTicks > 0) {
-        jumpTicks--;
-        if (jumpTicks == 0) playerY = project.rows - 2;
-      } else {
-        playerY = project.rows - 2;
-      }
-      _checkPlatformCell();
-    });
-  }
 
   void _checkPlatformCell() {
     final index = playerY * project.columns + playerX;
     if (index < 0 || index >= cells.length) return;
     if (cells[index] == 2) {
-      cells[index] = 0; score++; GameAudio.instance.collect();
+      cells[index] = 0; score += 1 + project.coinBonusScore; if (project.extraLifeOnCoin) lives = min(5, lives + 1).toInt(); GameAudio.instance.collect();
     } else if (cells[index] == 3) {
       lives--; GameAudio.instance.bump(); playerX = 0;
       if (lives <= 0) _finish(false, 'این بار دشمن‌ها قوی‌تر بودند. دوباره تلاش کن!');
@@ -502,7 +924,9 @@ class _GamePageState extends State<GamePage> {
     setState(() {
       roadTick++;
       for (var i = 0; i < roadObjects.length; i++) { roadObjects[i] += 3; }
+      for (var i = 0; i < roadCoins.length; i++) { roadCoins[i] += 3; }
       roadObjects.removeWhere((v) => v >= 24);
+      roadCoins.removeWhere((v) => v >= 24);
       if (random.nextDouble() < .62) {
         final newLane = random.nextInt(3);
         final busy = roadObjects.any((v) => v < 3 && v % 3 == newLane);
@@ -515,8 +939,11 @@ class _GamePageState extends State<GamePage> {
         GameAudio.instance.bump();
         if (lives <= 0) _finish(false, 'ماشینت سه بار به مانع خورد. امتیاز: ' + score.toString());
       } else {
-        score++;
-        if (roadTick % 4 == 0) GameAudio.instance.collect();
+        final collectedCoins = roadCoins.where((v) => v >= 21 && v < 24 && v % 3 == lane).length;
+        roadCoins.removeWhere((v) => v >= 21 && v < 24 && v % 3 == lane);
+        score += 1 + collectedCoins * (5 + project.coinBonusScore);
+        if (project.extraLifeOnCoin && collectedCoins > 0) lives = min(5, lives + collectedCoins).toInt();
+        if (collectedCoins > 0 || roadTick % 4 == 0) GameAudio.instance.collect();
       }
     });
   }
@@ -549,7 +976,7 @@ class _GamePageState extends State<GamePage> {
     if (finished || !mounted) return;
     finished = true;
     ticker?.cancel();
-    if (success) { GameAudio.instance.success(); } else { GameAudio.instance.bump(); }
+    if (success) { GameAudio.instance.success(); AchievementStore.markLevelComplete(project); } else { GameAudio.instance.bump(); }
     Future.delayed(const Duration(milliseconds: 180), () {
       if (!mounted) return;
       showDialog<void>(
@@ -560,6 +987,12 @@ class _GamePageState extends State<GamePage> {
           content: Text(message),
           actions: [
             TextButton(onPressed: () { Navigator.pop(d); Navigator.pop(context); }, child: const Text('بازگشت به ویرایشگر')),
+            if (success && project.activeLevel < project.levels.length - 1)
+              OutlinedButton(onPressed: () {
+                Navigator.pop(d);
+                project.setActiveLevel(project.activeLevel + 1);
+                _restart();
+              }, child: const Text('مرحله بعدی')),
             FilledButton(onPressed: () { Navigator.pop(d); _restart(); }, child: const Text('دوباره بازی کن')),
           ],
         ),
@@ -574,16 +1007,21 @@ class _GamePageState extends State<GamePage> {
       score = 0; moves = 0; lives = 3; paused = false; finished = false;
       revealed.clear(); matched.clear(); firstCard = null; checkingCards = false;
       player = cells.indexOf(5); if (player < 0) player = 12;
-      playerX = 0; playerY = project.rows - 2; jumpTicks = 0; lane = 1; roadTick = 0;
+      final platformStart = cells.indexOf(5);
+      playerX = platformStart >= 0 ? platformStart % project.columns : 0;
+      playerY = project.rows - 2; jumpTicks = 0; lane = 1; roadTick = 0;
       _resetRoadObjects();
       if (project.type == GameType.memory) _makeMemoryCards();
     });
-    if (project.type == GameType.platformer) ticker = Timer.periodic(const Duration(milliseconds: 190), (_) => _platformTick());
     if (project.type == GameType.driving) ticker = Timer.periodic(const Duration(milliseconds: 530), (_) => _driveTick());
   }
 
   @override
-  Widget build(BuildContext context) => Directionality(
+  Widget build(BuildContext context) {
+    if (project.type == GameType.platformer) {
+      return PlatformerGameScreen(project: project);
+    }
+    return Directionality(
         textDirection: TextDirection.rtl,
         child: Scaffold(
           appBar: AppBar(
@@ -600,7 +1038,7 @@ class _GamePageState extends State<GamePage> {
               child: Column(children: [
                 _scoreBar(),
                 const SizedBox(height: 10),
-                Expanded(child: _gameBoard()),
+                Expanded(child: RepaintBoundary(child: _gameBoard())),
                 const SizedBox(height: 10),
                 if (paused)
                   FilledButton.icon(onPressed: () => setState(() => paused = false), icon: const Icon(Icons.play_arrow), label: const Text('ادامه بازی'))
@@ -612,11 +1050,13 @@ class _GamePageState extends State<GamePage> {
           ]),
         ),
       );
+  }
 
   Widget _scoreBar() => Row(children: [
         _pill('⭐ ' + score.toString(), const Color(0xFFFFF0BD)),
         const SizedBox(width: 7),
         _pill('حرکت ' + moves.toString(), Colors.white),
+        _pill('مرحله ${project.activeLevel + 1}/${project.levels.length}', const Color(0xFFE9E1FF)),
         const Spacer(),
         _pill('❤️ ' + lives.toString(), const Color(0xFFFFE0E6)),
       ]);
@@ -647,7 +1087,7 @@ class _GamePageState extends State<GamePage> {
             duration: const Duration(milliseconds: 120),
             decoration: BoxDecoration(color: cells[i] == 1 ? const Color(0xFF6D5A9E) : cells[i] == 4 ? const Color(0xFFFFD96B) : const Color(0xFFEAF5DF), borderRadius: BorderRadius.circular(4)),
             alignment: Alignment.center,
-            child: FittedBox(child: Text(isPlayer ? characterOptions[project.character] : cells[i] == 2 ? '💎' : cells[i] == 4 ? '🚪' : cells[i] == 5 ? '🏁' : '', style: const TextStyle(fontSize: 22))),
+            child: GameTileArt(type: GameType.maze, value: cells[i], character: project.character, isPlayer: isPlayer),
           );
         },
       ),
@@ -670,7 +1110,7 @@ class _GamePageState extends State<GamePage> {
             duration: const Duration(milliseconds: 100),
             decoration: BoxDecoration(color: cells[i] == 1 ? const Color(0xFF9B7A53) : const Color(0xFFDDF2FF), borderRadius: BorderRadius.circular(5)),
             alignment: Alignment.center,
-            child: FittedBox(child: Text(isPlayer ? characterOptions[project.character] : cells[i] == 2 ? '🪙' : cells[i] == 3 ? '👾' : cells[i] == 4 ? '🏆' : cells[i] == 1 ? '🟫' : '', style: const TextStyle(fontSize: 21))),
+            child: GameTileArt(type: GameType.platformer, value: cells[i], character: project.character, isPlayer: isPlayer),
           );
         },
       ),
@@ -697,7 +1137,7 @@ class _GamePageState extends State<GamePage> {
               boxShadow: [BoxShadow(color: Colors.black.withOpacity(.08), blurRadius: 5, offset: const Offset(0, 3))],
             ),
             alignment: Alignment.center,
-            child: AnimatedSwitcher(duration: const Duration(milliseconds: 180), child: Text(visible ? tileEmoji(GameType.memory, memoryCards[i]) : '❔', key: ValueKey('$i-$visible'), style: const TextStyle(fontSize: 30))),
+            child: AnimatedSwitcher(duration: const Duration(milliseconds: 180), child: visible ? GameTileArt(key: ValueKey('$i-$visible'), type: GameType.memory, value: memoryCards[i]) : const Text('✦', style: TextStyle(fontSize: 32, color: Colors.white))),
           ),
         );
       },
@@ -709,20 +1149,30 @@ class _GamePageState extends State<GamePage> {
     child: Container(
       padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(color: const Color(0xFF44475A), borderRadius: BorderRadius.circular(24), border: Border.all(color: Colors.white, width: 4)),
-      child: Column(children: List.generate(8, (row) => Expanded(child: Row(children: List.generate(3, (col) {
-        final object = roadObjects.any((v) => v ~/ 3 == row && v % 3 == col);
-        final car = row == 7 && col == lane;
-        return Expanded(child: Container(
-          margin: const EdgeInsets.all(2),
-          decoration: BoxDecoration(color: col == 1 ? const Color(0xFF656879) : const Color(0xFF55596B), borderRadius: BorderRadius.circular(5)),
-          alignment: Alignment.center,
-          child: Text(car ? characterOptions[project.character] : object ? '🚧' : randomRoadCoin(row, col) ? '🪙' : row.isEven ? '┊' : '', style: TextStyle(fontSize: car ? 31 : 23, color: Colors.white)),
-        ));
-      }))))),
+      child: Stack(
+        children: [
+          Positioned.fill(child: IgnorePointer(child: CustomPaint(painter: _RoadMarkingsPainter(roadTick)))),
+          Column(children: List.generate(8, (row) => Expanded(child: Row(children: List.generate(3, (col) {
+            final object = roadObjects.any((v) => v ~/ 3 == row && v % 3 == col);
+            final coin = roadCoins.any((v) => v ~/ 3 == row && v % 3 == col);
+            final car = row == 7 && col == lane;
+            return Expanded(child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              margin: const EdgeInsets.all(2),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter,
+                  colors: col == 1 ? [const Color(0xFF74798D), const Color(0xFF55596B)] : [const Color(0xFF626779), const Color(0xFF4A4F62)]),
+                borderRadius: BorderRadius.circular(5),
+              ),
+              alignment: Alignment.center,
+              child: GameTileArt(type: GameType.driving, value: car ? 4 : object ? 3 : coin ? 2 : 0, character: project.character, isPlayer: car),
+            ));
+          }))))),
+        ],
+      ),
     ),
   ));
 
-  bool randomRoadCoin(int row, int col) => (row * 7 + col * 3 + project.id.length) % 11 == 0;
 
   Widget _controls() {
     switch (project.type) {
@@ -757,34 +1207,35 @@ class _GamePageState extends State<GamePage> {
   Widget _controlButton(IconData icon, VoidCallback onPressed) => SizedBox(width: 58, height: 52, child: FilledButton(onPressed: onPressed, style: FilledButton.styleFrom(padding: EdgeInsets.zero, backgroundColor: purple), child: Icon(icon, size: 30)));
 }
 
+class _RoadMarkingsPainter extends CustomPainter {
+  const _RoadMarkingsPainter(this.tick);
+  final int tick;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = const Color(0x88FFFFFF)
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round;
+    final offset = (tick * 8.0) % 34;
+    for (final laneX in [size.width / 3, size.width * 2 / 3]) {
+      for (var y = -34.0 + offset; y < size.height; y += 34) {
+        canvas.drawLine(Offset(laneX, y), Offset(laneX, y + 15), paint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _RoadMarkingsPainter oldDelegate) => oldDelegate.tick != tick;
+}
+
 class GameBackdrop extends StatelessWidget {
   const GameBackdrop({super.key, required this.background});
   final int background;
   @override
-  Widget build(BuildContext context) {
-    final index = background.clamp(0, backgroundTop.length - 1);
-    return Positioned.fill(
-      child: DecoratedBox(
-        decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(backgroundTop[index]), Color(backgroundBottom[index])])),
-        child: Stack(children: [
-          Positioned(top: 45, right: 22, child: _bubble(70, Colors.white.withOpacity(.18))),
-          Positioned(top: 130, left: 18, child: _bubble(42, Colors.white.withOpacity(.2))),
-          Positioned(bottom: 70, right: 30, child: _bubble(55, Colors.white.withOpacity(.18))),
-          Positioned(bottom: 25, left: 45, child: _bubble(28, Colors.white.withOpacity(.24))),
-          Positioned(top: 28, left: 28, child: Text(
-            ['🦋  🌿', '☀️  🐚', '🌙  🪐', '🌈  🍭'][index],
-            style: const TextStyle(fontSize: 25),
-          )),
-          Positioned(bottom: 12, right: 12, child: Text(
-            ['🌳  🍄', '🏝️  🌊', '🚀  ⭐', '🍬  🍡'][index],
-            style: const TextStyle(fontSize: 27),
-          )),
-        ]),
-      ),
-    );
-  }
-
-  Widget _bubble(double size, Color color) => Container(width: size, height: size, decoration: BoxDecoration(color: color, shape: BoxShape.circle));
+  Widget build(BuildContext context) => Positioned.fill(
+        child: CustomPaint(painter: GameBackdropPainter(background)),
+      );
 }
 
 Color tileColor(GameType type, int value) {

@@ -50,7 +50,24 @@ class GameProject {
     this.background = 0,
     this.soundEnabled = true,
     this.musicEnabled = false,
-  });
+    this.coinBonusScore = 0,
+    this.extraLifeOnCoin = false,
+    List<List<int>>? stages,
+    this.activeLevel = 0,
+    List<List<List<int>>>? levelLayers,
+    this.activeLayer = 0,
+    List<List<bool>>? layerVisibility,
+  })  : levels = stages ?? [List<int>.from(cells)],
+        layersByLevel = levelLayers ??
+            (stages ?? [List<int>.from(cells)])
+                .map((stage) => [List<int>.from(stage)])
+                .toList(),
+        layerVisibilityByLevel = layerVisibility ??
+            (stages ?? [List<int>.from(cells)])
+                .map((stage) => List<bool>.filled(layerNames.length, true))
+                .toList() {
+    _normalizeLayers();
+  }
 
   final String id;
   String name;
@@ -60,31 +77,190 @@ class GameProject {
   int background;
   bool soundEnabled;
   bool musicEnabled;
+  int coinBonusScore;
+  bool extraLifeOnCoin;
+  List<List<int>> levels;
+  int activeLevel;
+  int activeLayer;
+  List<List<List<int>>> layersByLevel;
+  List<List<bool>> layerVisibilityByLevel;
+
+  List<bool> get layerVisibility => layerVisibilityByLevel[activeLevel];
+
+  List<List<int>> get layers => layersByLevel[activeLevel];
+
+  static const layerNames = ['لایه اصلی', 'پس‌زمینه', 'زمین و سکو', 'اشیا و جایزه‌ها', 'شخصیت‌ها و دشمنان'];
+
+  void _normalizeLayers() {
+    if (levels.isEmpty) levels = [List<int>.from(cells)];
+    while (layersByLevel.length < levels.length) {
+      layersByLevel.add([List<int>.from(levels[layersByLevel.length])]);
+    }
+    if (layersByLevel.length > levels.length) {
+      layersByLevel = layersByLevel.take(levels.length).toList();
+    }
+    while (layerVisibilityByLevel.length < levels.length) {
+      layerVisibilityByLevel.add(List<bool>.filled(layerNames.length, true));
+    }
+    if (layerVisibilityByLevel.length > levels.length) {
+      layerVisibilityByLevel = layerVisibilityByLevel.take(levels.length).toList();
+    }
+    for (var stage = 0; stage < layersByLevel.length; stage++) {
+      layerVisibilityByLevel[stage] = List<bool>.generate(
+        layerNames.length,
+        (i) => i < layerVisibilityByLevel[stage].length ? layerVisibilityByLevel[stage][i] : true,
+      );
+      if (layersByLevel[stage].isEmpty) {
+        layersByLevel[stage] = [List<int>.from(levels[stage])];
+      }
+      layersByLevel[stage] = layersByLevel[stage].take(layerNames.length).map((layer) =>
+          List<int>.generate(columns * rows, (i) => i < layer.length ? layer[i] : 0)).toList();
+    }
+    activeLevel = activeLevel.clamp(0, levels.length - 1).toInt();
+    activeLayer = activeLayer.clamp(0, layers.length - 1).toInt();
+  }
+
+  List<int> composeLayers([int? stageIndex]) {
+    final stage = (stageIndex ?? activeLevel).clamp(0, layersByLevel.length - 1).toInt();
+    final result = List<int>.filled(columns * rows, 0);
+    for (var layerIndex = 0; layerIndex < layersByLevel[stage].length; layerIndex++) {
+      if (!layerVisibilityByLevel[stage][layerIndex]) continue;
+      final layer = layersByLevel[stage][layerIndex];
+      for (var i = 0; i < result.length; i++) {
+        if (layer[i] == -1) {
+          result[i] = 0;
+        } else if (layer[i] != 0) {
+          result[i] = layer[i];
+        }
+      }
+    }
+    return result;
+  }
+
+  void toggleLayerVisibility(int index) {
+    if (index < 0 || index >= layers.length) return;
+    layerVisibility[index] = !layerVisibility[index];
+    cells = composeLayers();
+  }
+
+  void addLayer() {
+    if (layers.length >= layerNames.length) return;
+    layers.add(List<int>.filled(columns * rows, 0));
+    layerVisibility.add(true);
+    activeLayer = layers.length - 1;
+    cells = composeLayers();
+  }
+
+  void removeActiveLayer() {
+    if (layers.length <= 1) return;
+    layers.removeAt(activeLayer);
+    layerVisibility.removeAt(activeLayer);
+    activeLayer = activeLayer.clamp(0, layers.length - 1).toInt();
+    cells = composeLayers();
+  }
+
+  /// Moves the selected layer in the visual stack. Higher indexes render on top.
+  void moveActiveLayer(int offset) {
+    final target = activeLayer + offset;
+    if (target < 0 || target >= layers.length) return;
+    final selected = layers.removeAt(activeLayer);
+    final visible = layerVisibility.removeAt(activeLayer);
+    layers.insert(target, selected);
+    layerVisibility.insert(target, visible);
+    activeLayer = target;
+    cells = composeLayers();
+  }
 
   int get columns => type.columns;
   int get rows => type.rows;
 
-  GameProject copy() => GameProject(
-        id: id,
-        name: name,
-        type: type,
-        cells: List<int>.from(cells),
-        character: character,
-        background: background,
-        soundEnabled: soundEnabled,
-        musicEnabled: musicEnabled,
-      );
+  GameProject copy() {
+    syncActiveLevel();
+    return GameProject(
+      id: id,
+      name: name,
+      type: type,
+      cells: List<int>.from(cells),
+      character: character,
+      background: background,
+      soundEnabled: soundEnabled,
+      musicEnabled: musicEnabled,
+      coinBonusScore: coinBonusScore,
+      extraLifeOnCoin: extraLifeOnCoin,
+      stages: levels.map((stage) => List<int>.from(stage)).toList(),
+      activeLevel: activeLevel,
+      activeLayer: activeLayer,
+      levelLayers: layersByLevel.map((stage) => stage.map((layer) => List<int>.from(layer)).toList()).toList(),
+      layerVisibility: layerVisibilityByLevel.map((stage) => List<bool>.from(stage)).toList(),
+    );
+  }
 
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'type': type.name,
-        'cells': cells,
-        'character': character,
-        'background': background,
-        'soundEnabled': soundEnabled,
-        'musicEnabled': musicEnabled,
-      };
+  void syncActiveLevel() {
+    if (levels.isEmpty) levels = [List<int>.from(cells)];
+    _normalizeLayers();
+    activeLevel = activeLevel.clamp(0, levels.length - 1).toInt();
+    // Non-platformer editors edit the flat cell array directly. Platformer
+    // edits target a specific layer, so its layer stack remains authoritative.
+    if (type != GameType.platformer) {
+      layersByLevel[activeLevel][0] = List<int>.from(cells);
+    }
+    cells = composeLayers();
+    levels[activeLevel] = List<int>.from(cells);
+  }
+
+  void setActiveLevel(int index) {
+    syncActiveLevel();
+    activeLevel = index.clamp(0, levels.length - 1).toInt();
+    activeLayer = 0;
+    cells = composeLayers();
+  }
+
+  void addLevel({List<int>? copyFrom}) {
+    syncActiveLevel();
+    final next = copyFrom == null ? List<int>.filled(columns * rows, 0) : List<int>.from(copyFrom);
+    levels.add(next);
+    layersByLevel.add(copyFrom == null
+        ? [List<int>.from(next)]
+        : layers.map((layer) => List<int>.from(layer)).toList());
+    layerVisibilityByLevel.add(copyFrom == null
+        ? List<bool>.filled(layerNames.length, true)
+        : List<bool>.from(layerVisibility));
+    activeLevel = levels.length - 1;
+    activeLayer = 0;
+    cells = List<int>.from(next);
+  }
+
+  void removeActiveLevel() {
+    if (levels.length <= 1) return;
+    syncActiveLevel();
+    levels.removeAt(activeLevel);
+    layersByLevel.removeAt(activeLevel);
+    layerVisibilityByLevel.removeAt(activeLevel);
+    activeLevel = activeLevel.clamp(0, levels.length - 1).toInt();
+    activeLayer = 0;
+    cells = composeLayers();
+  }
+
+  Map<String, dynamic> toJson() {
+    syncActiveLevel();
+    return {
+      'id': id,
+      'name': name,
+      'type': type.name,
+      'cells': cells,
+      'levels': levels,
+      'activeLevel': activeLevel,
+      'activeLayer': activeLayer,
+      'levelLayers': layersByLevel,
+      'layerVisibility': layerVisibilityByLevel,
+      'character': character,
+      'background': background,
+      'soundEnabled': soundEnabled,
+      'musicEnabled': musicEnabled,
+      'coinBonusScore': coinBonusScore,
+      'extraLifeOnCoin': extraLifeOnCoin,
+    };
+  }
 
   factory GameProject.fromJson(Map<String, dynamic> json) {
     final type = GameType.values.firstWhere(
@@ -92,20 +268,101 @@ class GameProject {
       orElse: () => GameType.maze,
     );
     final expected = type.columns * type.rows;
-    final raw = (json['cells'] as List?)?.map((e) => (e as num).toInt()).toList() ?? [];
-    final cells = List<int>.generate(
-      expected,
-      (i) => i < raw.length ? raw[i] : 0,
-    );
+    final rawValue = json['cells'];
+    final allowedValues = switch (type) {
+      GameType.maze => const {0, 1, 2, 4, 5},
+      GameType.platformer => const {0, 1, 2, 3, 4, 5},
+      GameType.memory => const {0, 1, 2, 3, 4, 5, 6, 7, 8},
+      GameType.driving => const {0, 2, 3},
+    };
+    List<int> normalizeCells(dynamic source) {
+      final values = source is List
+          ? source.map((e) => e is num ? e.toInt() : -999999).toList()
+          : <int>[];
+      return List<int>.generate(expected, (i) {
+        final value = i < values.length ? values[i] : 0;
+        return allowedValues.contains(value) ? value : 0;
+      });
+    }
+    final cells = normalizeCells(rawValue);
+    final rawStages = json['levels'];
+    final levels = rawStages is List
+        ? rawStages.whereType<List>().take(20).map(normalizeCells).toList()
+        : <List<int>>[];
+    if (levels.isEmpty) levels.add(List<int>.from(cells));
+    final activeValue = json['activeLevel'];
+    final activeLevel = (activeValue is num ? activeValue.toInt() : 0).clamp(0, levels.length - 1).toInt();
+    final rawLayerStages = json['levelLayers'];
+    final levelLayers = <List<List<int>>>[];
+    if (rawLayerStages is List) {
+      for (final stage in rawLayerStages.take(20)) {
+        if (stage is List) {
+          final parsed = stage.take(layerNames.length).map((rawLayer) {
+            final values = rawLayer is List ? rawLayer : const <dynamic>[];
+            return List<int>.generate(expected, (i) {
+              final value = i < values.length && values[i] is num ? (values[i] as num).toInt() : 0;
+              return value == -1 || allowedValues.contains(value) ? value : 0;
+            });
+          }).toList();
+          levelLayers.add(parsed.isEmpty ? [List<int>.from(cells)] : parsed);
+        } else {
+          levelLayers.add([List<int>.from(cells)]);
+        }
+      }
+    }
+    while (levelLayers.length < levels.length) {
+      levelLayers.add([List<int>.from(levels[levelLayers.length])]);
+    }
+    if (levelLayers.length > levels.length) levelLayers.removeRange(levels.length, levelLayers.length);
+    final rawVisibility = json['layerVisibility'];
+    final visibility = <List<bool>>[];
+    if (rawVisibility is List) {
+      for (final stage in rawVisibility.take(20)) {
+        visibility.add(List<bool>.generate(
+          layerNames.length,
+          (i) => stage is List && i < stage.length ? stage[i] == true : true,
+        ));
+      }
+    }
+    while (visibility.length < levels.length) {
+      visibility.add(List<bool>.filled(layerNames.length, true));
+    }
+    if (visibility.length > levels.length) visibility.removeRange(levels.length, visibility.length);
+    final activeLayerValue = json['activeLayer'];
+    final activeLayer = (activeLayerValue is num ? activeLayerValue.toInt() : 0)
+        .clamp(0, levelLayers[activeLevel].length - 1).toInt();
+    final activeCells = List<int>.filled(expected, 0);
+    for (var layerIndex = 0; layerIndex < levelLayers[activeLevel].length; layerIndex++) {
+      if (!visibility[activeLevel][layerIndex]) continue;
+      final layer = levelLayers[activeLevel][layerIndex];
+      for (var i = 0; i < expected; i++) {
+        if (layer[i] == -1) {
+          activeCells[i] = 0;
+        } else if (layer[i] != 0) {
+          activeCells[i] = layer[i];
+        }
+      }
+    }
+    final characterValue = json['character'];
+    final backgroundValue = json['background'];
+    final nameValue = json['name']?.toString().trim() ?? '';
+    final idValue = json['id']?.toString().trim() ?? '';
     return GameProject(
-      id: json['id']?.toString() ?? DateTime.now().microsecondsSinceEpoch.toString(),
-      name: json['name']?.toString() ?? 'بازی من',
+      id: idValue.isEmpty ? DateTime.now().microsecondsSinceEpoch.toString() : idValue,
+      name: nameValue.isEmpty ? 'بازی من' : nameValue,
       type: type,
-      cells: cells,
-      character: ((json['character'] as num?)?.toInt() ?? 0).clamp(0, characterOptions.length - 1).toInt(),
-      background: ((json['background'] as num?)?.toInt() ?? 0).clamp(0, backgroundNames.length - 1).toInt(),
-      soundEnabled: json['soundEnabled'] as bool? ?? true,
-      musicEnabled: json['musicEnabled'] as bool? ?? false,
+      cells: activeCells,
+      stages: levels,
+      activeLevel: activeLevel,
+      activeLayer: activeLayer,
+      levelLayers: levelLayers,
+      layerVisibility: visibility,
+      character: (characterValue is num ? characterValue.toInt() : 0).clamp(0, characterOptions.length - 1).toInt(),
+      background: (backgroundValue is num ? backgroundValue.toInt() : 0).clamp(0, backgroundNames.length - 1).toInt(),
+      soundEnabled: json['soundEnabled'] is bool ? json['soundEnabled'] as bool : true,
+      musicEnabled: json['musicEnabled'] is bool ? json['musicEnabled'] as bool : false,
+      coinBonusScore: (json['coinBonusScore'] is num ? (json['coinBonusScore'] as num).toInt() : 0).clamp(0, 50).toInt(),
+      extraLifeOnCoin: json['extraLifeOnCoin'] == true,
     );
   }
 
@@ -166,11 +423,11 @@ class GameProject {
       cells[6 * 12 + 11] = 4;
       cells[6 * 12] = 5;
     } else if (type == GameType.driving) {
-      for (final i in [8, 17, 29, 38, 51, 62, 70]) {
-        if (i < cells.length) cells[i] = 3;
+      for (final i in [2, 9, 14, 17]) {
+        cells[i] = 3;
       }
-      for (final i in [12, 25, 44, 57, 73]) {
-        if (i < cells.length) cells[i] = 2;
+      for (final i in [1, 4, 7, 13, 19]) {
+        cells[i] = 2;
       }
     } else {
       final symbols = List<int>.generate(8, (i) => i + 1)..addAll(List<int>.generate(8, (i) => i + 1));
