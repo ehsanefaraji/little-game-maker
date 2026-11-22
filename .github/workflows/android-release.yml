@@ -1,0 +1,97 @@
+name: Android Release APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build signed release APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Generate Android platform files
+        run: flutter create . --platforms=android --org com.littlegamemaker --project-name little_game_maker
+
+      - name: Configure release signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.LITTLEGAMEMAKER_KEYSTORE_BASE64 }}
+          KEY_PASSWORD: ${{ secrets.LITTLEGAMEMAKER_KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.LITTLEGAMEMAKER_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.LITTLEGAMEMAKER_KEY_ALIAS }}
+        run: |
+          test -n "$KEYSTORE_BASE64" || (echo "Missing keystore secret" && exit 1)
+          test -n "$KEY_PASSWORD" || (echo "Missing key password secret" && exit 1)
+          test -n "$STORE_PASSWORD" || (echo "Missing store password secret" && exit 1)
+          test -n "$KEY_ALIAS" || (echo "Missing key alias secret" && exit 1)
+          echo "$KEYSTORE_BASE64" | base64 --decode > android/app/upload-keystore.jks
+          cat > android/key.properties <<EOF
+          storePassword=$STORE_PASSWORD
+          keyPassword=$KEY_PASSWORD
+          keyAlias=$KEY_ALIAS
+          storeFile=upload-keystore.jks
+          EOF
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("android/app/build.gradle.kts")
+          s = p.read_text()
+          marker = "android {"
+          signing = '''
+          val keystoreProperties = java.util.Properties()
+          val keystorePropertiesFile = rootProject.file("key.properties")
+          if (keystorePropertiesFile.exists()) {
+              keystoreProperties.load(java.io.FileInputStream(keystorePropertiesFile))
+          }
+
+          '''
+          if "val keystoreProperties =" not in s:
+              s = s.replace(marker, signing + marker, 1)
+          s = s.replace(
+              "    buildTypes {\n        release {",
+              '''    signingConfigs {
+                  create("release") {
+                      keyAlias = keystoreProperties["keyAlias"] as String
+                      keyPassword = keystoreProperties["keyPassword"] as String
+                      storeFile = file(keystoreProperties["storeFile"] as String)
+                      storePassword = keystoreProperties["storePassword"] as String
+                  }
+              }
+              buildTypes {
+                  release {
+                      signingConfig = signingConfigs.getByName("release")''',
+              1
+          )
+          p.write_text(s)
+          PY
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: little-game-maker-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 30
