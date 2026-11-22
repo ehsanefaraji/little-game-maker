@@ -273,16 +273,25 @@ class _EditorPageState extends State<EditorPage> {
 
   Widget _tool(int value) {
     final selectedNow = selected == value;
-    return InkWell(
-      onTap: () => setState(() => selected = value),
-      borderRadius: BorderRadius.circular(13),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 160),
-        width: 74,
-        padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 5),
-        decoration: BoxDecoration(color: selectedNow ? const Color(0xFFE9E1FF) : const Color(0xFFF8F6FC), borderRadius: BorderRadius.circular(13), border: Border.all(color: selectedNow ? purple : Colors.black12, width: selectedNow ? 2 : 1)),
-        child: Column(children: [Text(tileEmoji(project.type, value), style: const TextStyle(fontSize: 23)), const SizedBox(height: 3), Text(toolLabel(value), maxLines: 1, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700))]),
+    Widget chip() => Container(
+      width: 74,
+      padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 5),
+      decoration: BoxDecoration(
+        color: selectedNow ? const Color(0xFFE9E1FF) : const Color(0xFFF8F6FC),
+        borderRadius: BorderRadius.circular(13),
+        border: Border.all(color: selectedNow ? purple : Colors.black12, width: selectedNow ? 2 : 1),
       ),
+      child: Column(children: [
+        Text(tileEmoji(project.type, value), style: const TextStyle(fontSize: 23)),
+        const SizedBox(height: 3),
+        Text(toolLabel(value), maxLines: 1, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700)),
+      ]),
+    );
+    return Draggable<int>(
+      data: value,
+      feedback: Material(color: Colors.transparent, child: Transform.scale(scale: 1.08, child: chip())),
+      childWhenDragging: Opacity(opacity: .35, child: InkWell(onTap: () => setState(() => selected = value), child: chip())),
+      child: InkWell(onTap: () => setState(() => selected = value), borderRadius: BorderRadius.circular(13), child: chip()),
     );
   }
 
